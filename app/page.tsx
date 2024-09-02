@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import ChatInterface from './components/ChatInterface';
 import VoiceInterface from './components/VoiceInterface';
 import Calendar from './components/calendar/Calendar';
@@ -11,8 +11,8 @@ type ValuePiece = Date | null;
 type Value = ValuePiece | [ValuePiece, ValuePiece];
 
 interface ChatMessage {
-  role: 'USER' | 'CHATBOT';
-  message: string;
+  role: 'User' | 'Chatbot';
+  content: string;
 }
 
 export default function Home() {
@@ -20,15 +20,25 @@ export default function Home() {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [date, setDate] = useState<Value>(new Date());
   const [interimTranscript, setInterimTranscript] = useState('');
+  const isProcessingRef = useRef(false);
 
-  const handleNewMessage = async (message: string) => {
+  const handleNewMessage = useCallback(async (message: string) => {
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
+
+    // Add user message to messages state
     setMessages(prev => [...prev, { text: message, isUser: true }]);
     
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, chatHistory }),
+        body: JSON.stringify({ 
+          messages: [
+            ...chatHistory,
+            { role: 'User', content: message }
+          ]
+        }),
       });
 
       if (!response.ok) throw new Error('Network response was not ok');
@@ -36,6 +46,7 @@ export default function Home() {
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No reader available');
 
+      // Add an empty AI message that we'll update as we receive the response
       setMessages(prev => [...prev, { text: '', isUser: false }]);
 
       let fullResponse = '';
@@ -43,10 +54,10 @@ export default function Home() {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
-        const text = new TextDecoder().decode(value);
-        fullResponse += text;
-
+        const chunk = new TextDecoder().decode(value);
+        fullResponse += chunk;
+        
+        // Update the AI message as we receive more of the response
         setMessages(prev => {
           const newMessages = [...prev];
           newMessages[newMessages.length - 1].text = fullResponse;
@@ -57,19 +68,21 @@ export default function Home() {
       // Update chat history
       setChatHistory(prev => [
         ...prev,
-        { role: 'USER', message },
-        { role: 'CHATBOT', message: fullResponse }
+        { role: 'User', content: message },
+        { role: 'Chatbot', content: fullResponse }
       ]);
 
     } catch (error) {
       console.error('Error:', error);
       setMessages(prev => [...prev, { text: "Sorry, an error occurred.", isUser: false }]);
+    } finally {
+      isProcessingRef.current = false;
     }
-  };
+  }, [chatHistory]);
 
-  const handleInterimTranscript = (transcript: string) => {
+  const handleInterimTranscript = useCallback((transcript: string) => {
     setInterimTranscript(transcript);
-  };
+  }, []);
 
   return (
     <main className="flex min-h-screen p-4">
